@@ -16,6 +16,10 @@ import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
+# Imports locais no topo para evitar imports circulares em runtime
+from src.data.hf_dataset_loader import HuggingFaceECGHub
+from src.data.mimic_vectorizer import MIMICIVVectorizer
+
 
 class ECGKnowledgeVectorDB:
     """
@@ -247,18 +251,12 @@ class ECGKnowledgeVectorDB:
                 if response.status == 200:
                     data = json.loads(response.read().decode())
                     cols = data.get("result", {}).get("collections", [])
-                    
-                    detailed_cols = []
-                    for c in cols:
-                        c_name = c["name"]
-                        c_info = self.get_collection_info(c_name)
-                        detailed_cols.append({
-                            "name": c_name,
-                            "points_count": c_info.get("points_count", 0),
-                            "vectors_count": c_info.get("vectors_count", 0),
-                            "status": c_info.get("status", "green")
-                        })
-                    return detailed_cols
+                    # Retorna apenas nome e status básico — detalhes são buscados sob demanda
+                    # para evitar N+1 requisições HTTP na inicialização da UI
+                    return [
+                        {"name": c["name"], "points_count": 0, "vectors_count": 0, "status": "green"}
+                        for c in cols
+                    ]
                 return []
         except Exception:
             return []
@@ -311,6 +309,8 @@ class ECGKnowledgeVectorDB:
             with urllib.request.urlopen(req, timeout=5.0) as response:
                 return response.status in [200, 201]
         except Exception as e:
+            import warnings
+            warnings.warn(f"Qdrant upsert falhou para '{collection_name}': {e}")
             return False
 
     def sync_all_collections_to_qdrant(self) -> Dict[str, Any]:
@@ -350,7 +350,6 @@ class ECGKnowledgeVectorDB:
             })
 
         # --- 2. Sincronizar Coleção: ecg_datasets_catalog ---
-        from src.data.hf_dataset_loader import HuggingFaceECGHub
         hf_hub = HuggingFaceECGHub()
         datasets_catalog = hf_hub.get_all_datasets()
         col_datasets = "ecg_datasets_catalog"
@@ -396,7 +395,6 @@ class ECGKnowledgeVectorDB:
             })
 
         # --- 4. Sincronizar Coleção: mimic_iv_ecg_800k (PhysioNet / Harvard-BIDMC) ---
-        from src.data.mimic_vectorizer import MIMICIVVectorizer
         mimic_vec = MIMICIVVectorizer(vector_db_host=self.vector_db_host, vector_db_port=self.vector_db_port)
         mimic_res = mimic_vec.ingest_mimic_records(total_records=200, batch_size=50, recreate_collection=False)
         if mimic_res.get("success"):
@@ -490,7 +488,6 @@ class ECGKnowledgeVectorDB:
         Busca casos hospitalares semelhantes no banco de dados MIMIC-IV-ECG (~800k exames)
         indexado no Qdrant Vector Database.
         """
-        from src.data.mimic_vectorizer import MIMICIVVectorizer
         mimic_engine = MIMICIVVectorizer(
             vector_db_host=self.vector_db_host,
             vector_db_port=self.vector_db_port

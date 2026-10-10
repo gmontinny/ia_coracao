@@ -33,6 +33,7 @@ def main():
     parser.add_argument("--batch-size", type=int, default=100, help="Tamanho do lote para streaming / upsert")
     parser.add_argument("--recreate", action="store_true", help="Recriar a coleção do zero no Qdrant")
     parser.add_argument("--search", type=str, default="", help="Executar busca vetorial semântica de teste")
+    parser.add_argument("--top-k", type=int, default=3, help="Número de casos similares a retornar na busca")
     parser.add_argument("--host", type=str, default=os.getenv("VECTOR_DB_HOST", "localhost"), help="Host do Qdrant")
     parser.add_argument("--port", type=int, default=int(os.getenv("VECTOR_DB_PORT", "6333")), help="Porta do Qdrant")
 
@@ -50,7 +51,7 @@ def main():
 
     if args.search:
         print(f"\n🔍 Executando Busca Vetorial k-NN para: '{args.search}'...")
-        results = vectorizer.search_similar_cases(args.search, top_k=3)
+        results = vectorizer.search_similar_cases(args.search, top_k=args.top_k)
         print(f"\nEncontrados {len(results)} casos hospitalares compatíveis:")
         for idx, res in enumerate(results, 1):
             print(f"\n  #{idx} [Similaridade: {res.get('similarity_percentage', 'N/A')}] - {res.get('ecg_id', 'N/A')}")

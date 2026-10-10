@@ -27,7 +27,8 @@ def plot_roc_comparison(models_dict: Dict[str, Any], X_test: pd.DataFrame, y_tes
             label_name = name.replace('_', ' ').title()
             color = colors[idx % len(colors)]
             ax.plot(fpr, tpr, color=color, lw=2, label=f"{label_name} (AUC = {roc_auc:.3f})")
-        except Exception:
+        except Exception as e:
+            ax.plot([], [], label=f"{name} (erro: {e})")
             continue
 
     ax.plot([0, 1], [0, 1], color='gray', lw=1.5, linestyle='--', label='Aleatório / Linha de Base (AUC = 0.500)')
@@ -57,7 +58,8 @@ def plot_pr_comparison(models_dict: Dict[str, Any], X_test: pd.DataFrame, y_test
             label_name = name.replace('_', ' ').title()
             color = colors[idx % len(colors)]
             ax.plot(rec, prec, color=color, lw=2, label=f"{label_name} (PR-AUC = {pr_auc:.3f})")
-        except Exception:
+        except Exception as e:
+            ax.plot([], [], label=f"{name} (erro: {e})")
             continue
 
     ax.set_xlim([0.0, 1.0])
@@ -141,7 +143,8 @@ def plot_calibration_curve_custom(models_dict: Dict[str, Any], X_test: pd.DataFr
             prob_true, prob_pred = calibration_curve(y_test, y_proba, n_bins=8)
             label_name = name.replace('_', ' ').title()
             ax.plot(prob_pred, prob_true, "s-", label=label_name)
-        except Exception:
+        except Exception as e:
+            ax.plot([], [], label=f"{name} (erro: {e})")
             continue
 
     ax.set_ylabel("Fração de Casos Positivos Reais", fontsize=11, fontweight='bold')

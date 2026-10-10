@@ -102,13 +102,14 @@ class ECGDeepVisionNet:
 
         self.temperature = temperature
         self.model = ECGConvNet(num_classes=2).to(self.device)
-        self._initialize_pretrained_biomarkers()
+        self._initialize_weights()
         self.model.eval()
 
-    def _initialize_pretrained_biomarkers(self):
+    def _initialize_weights(self):
         """
-        Inicializa pesos estruturados baseados em filtros convolucionais para detecção
-        de depressão ST, elevação de ponto J e regularidade de complexos QRS.
+        Inicializa pesos da rede com Kaiming/Xavier.
+        Nota: estes são pesos aleatórios com inicialização adequada, não pesos pré-treinados.
+        Para uso clínico real, é necessário fine-tune supervisionado em dataset de ECG anotado.
         """
         torch.manual_seed(42)
         for m in self.model.modules():
@@ -248,6 +249,7 @@ class ECGDeepVisionNet:
     ) -> np.ndarray:
         """
         Computa o mapa Grad-CAM retropropagando o gradiente da classe alvo.
+        Retorna zeros se os gradientes não estiverem disponíveis (ex: modelo em eval sem hook ativo).
         """
         self.model.zero_grad()
         score = logits[0, target_class]
@@ -256,23 +258,18 @@ class ECGDeepVisionNet:
         gradients = self.model.get_activations_gradient()
         activations = self.model.activations
 
-        if gradients is not None and activations is not None:
-            pooled_gradients = torch.mean(gradients, dim=[0, 2, 3])
-            
-            for i in range(activations.size(1)):
-                activations[:, i, :, :] *= pooled_gradients[i]
-
-            heatmap = torch.mean(activations, dim=1).squeeze()
-            heatmap = F.relu(heatmap)
-            heatmap = heatmap.detach().cpu().numpy()
-
-            max_val = np.max(heatmap)
-            if max_val > 0:
-                heatmap = heatmap / max_val
-            else:
-                heatmap = np.zeros_like(heatmap)
-
-            heatmap_resized = cv2.resize(heatmap, (original_shape[1], original_shape[0]))
-            return np.clip(heatmap_resized, 0, 1)
-        else:
+        if gradients is None or activations is None:
             return np.zeros(original_shape, dtype=np.float32)
+
+        pooled_gradients = torch.mean(gradients, dim=[0, 2, 3])
+        weighted = activations.clone()
+        for i in range(weighted.size(1)):
+            weighted[:, i, :, :] *= pooled_gradients[i]
+
+        heatmap = F.relu(torch.mean(weighted, dim=1)).squeeze()
+        heatmap = heatmap.detach().cpu().numpy()
+
+        max_val = np.max(heatmap)
+        heatmap = (heatmap / max_val) if max_val > 0 else np.zeros_like(heatmap)
+
+        return np.clip(cv2.resize(heatmap, (original_shape[1], original_shape[0])), 0, 1)

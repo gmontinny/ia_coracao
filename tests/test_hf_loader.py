@@ -71,8 +71,17 @@ def test_hf_hub_token_handling_and_validation():
     hub.set_token("hf_new_token_abcdefghijk")
     assert hub.get_token() == "hf_new_token_abcdefghijk"
 
-    # Validação de token (estrutura do retorno)
-    token_status = hub.validate_hf_token()
-    assert isinstance(token_status, dict)
-    assert "valid" in token_status
-    assert "message" in token_status
+    # Validação de token: testa apenas a estrutura do retorno sem fazer requisição HTTP real
+    # (evita falha em CI/CD sem conexão com internet)
+    from unittest.mock import patch, MagicMock
+    mock_response = MagicMock()
+    mock_response.status = 401
+    mock_response.__enter__ = lambda s: s
+    mock_response.__exit__ = MagicMock(return_value=False)
+
+    with patch("urllib.request.urlopen", side_effect=Exception("Sem conexão")):
+        token_status = hub.validate_hf_token()
+        assert isinstance(token_status, dict)
+        assert "valid" in token_status
+        assert "message" in token_status
+        assert token_status["valid"] is False

@@ -20,13 +20,13 @@ As doenças cardiovasculares constituem a principal causa de mortalidade em todo
 
 O **ECG-AI** é um ecossistema completo em Python que combina:
 1. **Visão Computacional e Filtro de Grade HSV**: Supressão de grade milimetrada de papéis de ECG (cores rosa, laranja, vermelho, verde e cinza) e binarização morfológica para isolar exclusivamente o traçado elétrico do coração.
-2. **Segmentação e Detecção de Derivações no Padrão YOLO / COCO**: Localização de caixas delimitadoras (*bounding boxes*) para as 12 derivações padrão (I, II, III, aVR, aVL, aVF, V1-V6), tira de ritmo de DII longo e complexos QRS, ondas P e T.
+2. **Segmentação Geométrica de Derivações no Padrão YOLO / COCO**: Localização de caixas delimitadoras (*bounding boxes*) para as 12 derivações padrão (I, II, III, aVR, aVL, aVF, V1-V6) via layout geométrico IEC 60601-2-51, tira de ritmo de DII longo e complexos QRS, ondas P e T. A confiança de cada detecção é estimada pela densidade de traçado na região, não por valores aleatórios.
 3. **Leitura Óptica Telemétrica em Quadro Inteiro (OCR / Telemetria)**: Módulo inteligente (`extract_header_metadata` com EasyOCR) que inspeciona o quadro completo do exame (cabeçalho superior, rodapé inferior e margens), extraindo automaticamente a frequência cardíaca impressa (FC), dados do paciente (nome, idade), intervalos eletrocardiográficos (PR, QRS, QT/QTc), eixo elétrico e velocidade do papel ($25\,\text{mm/s}$).
 4. **Processamento Digital de Sinais (PDS) Calibrado com Linha de Base Isoelétrica PR**: Reconstrução do sinal de voltagem 1D com isolamento estrito de tira única (evitando contagem dupla de linhas), calibração temporal para folhas completas de 10 segundos ($10.0\,\text{s}$), período refratário fisiológico ($\ge 300\,\text{ms} \le 200\,\text{bpm}$), variabilidade (HRV) e medição rigorosa de desvios do segmento ST referenciados na linha isoelétrica do segmento PR.
-5. **Deep Learning Convolucional Calibrado (PyTorch)**: Rede Neural Convolucional profunda com *Temperature Scaling*, estimativa de incerteza epistêmica (*Conformal Prediction*) e mapas de interpretabilidade visual com **Grad-CAM**.
+5. **Deep Learning Convolucional Calibrado (PyTorch)**: Rede Neural Convolucional profunda com *Temperature Scaling*, estimativa de incerteza epistêmica (*Conformal Prediction*) e mapas de interpretabilidade visual com **Grad-CAM**. Os pesos são inicializados com Kaiming/Xavier — para uso clínico real é necessário fine-tune supervisionado em dataset de ECG anotado (ex.: PTB-XL).
 6. **Machine Learning Tabular e Ensembles**: Pipeline completo com **XGBoost, LightGBM, Random Forest, Redes Neurais (MLP), SVM, Regressão Logística e Naive Bayes**, com validação cruzada estratificada 5-Fold e calibração de probabilidade.
-7. **Hub Internacional Hugging Face (64+ Datasets)**: Integração com o agregador oficial **[vlbthambawita/ECGDatasets](https://huggingface.co/spaces/vlbthambawita/ECGDatasets)** (Vajira Thambawita et al., SimulaMet), cobrindo bases de 1, 2 e 12 derivações de 15+ países (PTB-XL, Chapman, MIMIC-IV-ECG, CODE-15%, MIT-BIH).
-8. **Base Vetorial Qdrant & RAG Cardiológico**: Recuperação semântica e indexação vetorial de diretrizes oficiais (AHA/ACC, ESC, SBC 2024, 4ª Definição Universal de Infarto) e casos de referência para *Case-Based Reasoning*.
+7. **Hub Internacional Hugging Face (64+ Datasets)**: Catálogo estruturado e busca ao vivo via API do **[vlbthambawita/ECGDatasets](https://huggingface.co/spaces/vlbthambawita/ECGDatasets)** (Vajira Thambawita et al., SimulaMet), cobrindo bases de 1, 2 e 12 derivações de 15+ países (PTB-XL, Chapman, MIMIC-IV-ECG, CODE-15%, MIT-BIH). O download real dos datasets requer credenciamento no PhysioNet e token HuggingFace configurado no `.env`.
+8. **Base Vetorial Qdrant & RAG Cardiológico**: Recuperação semântica e indexação vetorial de diretrizes oficiais (AHA/ACC, ESC, SBC 2024, 4ª Definição Universal de Infarto) e casos de referência para *Case-Based Reasoning*. Os registros do MIMIC-IV-ECG indexados na coleção `mimic_iv_ecg_800k` são **sintéticos** (gerados com distribuição epidemiológica real) e identificados com o prefixo `MIMIC-SYN-`. Para dados reais, é necessário credenciamento no PhysioNet.
 9. **Interface Web Interativa (Streamlit)**: Dashboard intuitivo com banner telemétrico em tempo real, análise em lote (CSV), upload de imagens de ECG, gráficos comparativos de curvas ROC/PR, visualizadores YOLO/PDS, painel de sincronização do Qdrant e exportação de tabelas LaTeX para periódicos internacionais (IEEE, Elsevier, Springer, Nature, SBC).
 
 ---
@@ -187,9 +187,14 @@ Indexe lotes de biossinais de 12 derivações na coleção `mimic_iv_ecg_800k`:
 # Ingestão em streaming (exemplo com lote de 1.000 a 5.000 exames)
 python src/data/vectorize_mimic.py --records 1000 --batch-size 200
 
-# Teste imediato de busca por similaridade k-NN
+# Teste imediato de busca por similaridade k-NN (padrão: top 3 resultados)
 python src/data/vectorize_mimic.py --search "STEMI supradesnivelamento de ST anterior"
+
+# Controlar quantidade de resultados retornados
+python src/data/vectorize_mimic.py --search "Fibrilação Atrial" --top-k 5
 ```
+> **Nota:** Os registros gerados são sintéticos (prefixo `MIMIC-SYN-`), baseados na distribuição epidemiológica real do MIMIC-IV-ECG. Para ingestão de dados reais, é necessário credenciamento no [PhysioNet](https://physionet.org/content/mimic-iv-ecg/).
+
 *(Ou utilize a barra de progresso de streaming interativa no Módulo 5 do Streamlit).*
 
 ---
@@ -238,6 +243,9 @@ python src/data/vectorize_mimic.py --records 1000 --batch-size 200
 
 # Executar busca vetorial semântica de teste (Case-Based Reasoning)
 python src/data/vectorize_mimic.py --search "STEMI anterior supradesnivelamento V1-V4"
+
+# Controlar quantidade de resultados retornados na busca
+python src/data/vectorize_mimic.py --search "Bloqueio de Ramo Esquerdo" --top-k 5
 ```
 
 #### 4. Execução da Suíte de Testes Automatizados
@@ -272,12 +280,13 @@ A aplicação abrirá automaticamente no seu navegador no endereço `http://loca
   - **Área sob a Curva ROC (ROC-AUC)** e **Precisão-Recall (PR-AUC)**.
   - **Brier Score**: Avaliação de erro quadrático para calibração probabilística.
   - **Conformal Prediction (95% CI)**: Quantificação de incerteza epistêmica para triagem segura.
+- **Intervalos de Confiança Bootstrap (95% CI)**: Calculados via bootstrap não paramétrico (1.000 reamostras) para acurácia, sensibilidade, especificidade, F1-Score e ROC-AUC, prontos para inclusão em tabelas de artigos científicos.
 
 ---
 
 ## 📝 Exportação para Artigos Científicos
 
-A plataforma gera tabelas no formato **LaTeX** padronizadas para submissão direta a periódicos de alto impacto:
+A plataforma gera tabelas no formato **LaTeX** padronizadas para submissão direta a periódicos de alto impacto. Os intervalos de confiança bootstrap (95% CI) para acurácia, sensibilidade, especificidade, F1 e ROC-AUC são calculados automaticamente via `calculate_metric_confidence_intervals` em `src/utils/academic_metrics.py`.
 
 ```latex
 \begin{table*}[t]
@@ -296,6 +305,19 @@ Neural Network Mlp & 0.861 & 0.852 ± 0.020 & 0.883 & 0.833 & 0.870 & 0.876 & 0.
 \end{tabular}
 \end{table*}
 ```
+
+---
+
+## ⚠️ Limitações Técnicas e Transparência Científica
+
+Para uso acadêmico e publicação, as seguintes limitações devem ser declaradas na seção de *Limitations* do artigo:
+
+| Componente | Implementação Atual | Para Produção / Publicação |
+|---|---|---|
+| Detecção de Derivações (YOLO) | Segmentação geométrica por layout IEC 60601-2-51 | Fine-tune de YOLOv8 em dataset anotado de ECG |
+| CNN (Grad-CAM) | Pesos inicializados com Kaiming/Xavier | Fine-tune supervisionado em PTB-XL ou Chapman |
+| MIMIC-IV-ECG | Registros sintéticos (`MIMIC-SYN-*`) com distribuição epidemiológica real | Download real via credenciamento PhysioNet |
+| Benchmark Cross-Dataset | Métricas de referência da literatura | Validação experimental em datasets externos |
 
 ---
 

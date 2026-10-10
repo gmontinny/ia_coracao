@@ -309,8 +309,12 @@ class MIMICIVVectorizer:
         start_id: int = 100000
     ) -> List[Dict[str, Any]]:
         """
-        Gera um lote realista com a distribuição diagnóstica e fisiológica real do MIMIC-IV-ECG.
-        Útil para streaming de alta performance, testes de benchmark e indexação em larga escala.
+        Gera um lote sintético com distribuição diagnóstica baseada na epidemiologia real do MIMIC-IV-ECG.
+
+        IMPORTANTE: Estes são dados sintéticos gerados por distribuições estatísticas,
+        não registros reais de pacientes. Para uso com dados reais do MIMIC-IV-ECG,
+        é necessário credenciamento no PhysioNet (https://physionet.org/content/mimic-iv-ecg/).
+        Os registros sintéticos são marcados com 'data_source': 'synthetic'.
         """
         rng = np.random.RandomState(start_id)
         superclasses = ["NORM", "MI", "STTC", "CD", "HYP", "AFIB"]
@@ -398,8 +402,9 @@ class MIMICIVVectorizer:
                 keywords = ["hipertrofia", "lvh", "sokolow", "hipertensao"]
 
             batch.append({
-                "ecg_id": f"MIMIC-{ecg_num}",
+                "ecg_id": f"MIMIC-SYN-{ecg_num}",
                 "subject_id": int(10000000 + (ecg_num * 7) % 9000000),
+                "data_source": "synthetic",
                 "age": age,
                 "gender": gender,
                 "heart_rate": max(40, min(hr, 190)),

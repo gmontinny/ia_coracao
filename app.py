@@ -189,6 +189,7 @@ def main():
                     image_name = uploaded_file.name
 
             st.markdown("#### 2. Metadados Clínicos Opcionais do Paciente (Fusão Multimodal)")
+            patient_meta = None
             with st.expander("Preencher dados adicionais do paciente (Opcional)", expanded=False):
                 p_age = st.slider("Idade (anos)", 18, 95, 54)
                 p_sex = st.selectbox("Sexo", ["M", "F"], format_func=lambda x: "Masculino" if x == "M" else "Feminino")
@@ -224,7 +225,7 @@ def main():
             st.markdown("---")
             if st.button("🚀 Processar Imagem com Inteligência Artificial Calibrada & YOLO", type="primary", use_container_width=True):
                 with st.spinner("Executando segmentação YOLO, filtro de grade HSV, extração de sinal e inferência calibrada..."):
-                    result = pipeline.analyze_image_ecg(image_to_process, patient_metadata=patient_meta if 'patient_meta' in locals() else None)
+                    result = pipeline.analyze_image_ecg(image_to_process, patient_metadata=patient_meta)
 
                 sig_proc = result['signal_processing']
                 metrics = sig_proc['metrics']

@@ -35,18 +35,18 @@ class ECGClinicalReportGenerator:
         """
         timestamp = datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S")
 
-        # Consolidação de variáveis de risco
+        # Consolidação de risco: usa o valor já calculado pelo pipeline multimodal
+        # ml_prediction contém o risco fusionado (tabular + visão + sinal)
+        # Evita recalcular com max() que pode inflar o score
         risk_score = 0.0
         risk_components = []
 
         if ml_prediction:
-            risk_score = max(risk_score, ml_prediction.get('risk_score', 0.0))
-            prob_pct = f"{ml_prediction.get('risk_score', 0.0) * 100:.1f}%"
+            risk_score = float(ml_prediction.get('risk_score', 0.0))
+            prob_pct = f"{risk_score * 100:.1f}%"
             risk_components.append(f"Probabilidade pelo Modelo Ensemble: {prob_pct}")
 
         if ecg_metrics:
-            ecg_risk = ecg_metrics.get('risk_score', 0.0)
-            risk_score = max(risk_score, ecg_risk)
             if ecg_metrics.get('is_st_abnormal'):
                 risk_components.append(f"Anormalidade de Segmento ST: {ecg_metrics.get('st_condition')} (Oldpeak est.: {ecg_metrics.get('estimated_oldpeak')} mV)")
             if ecg_metrics.get('rhythm_severity') != "Normal":
@@ -152,6 +152,9 @@ class ECGClinicalReportGenerator:
 
         telemetry_str = "\n".join(telemetry_lines) + ("\n" if telemetry_lines else "")
 
+        risk_components_text = "\n".join(["- " + c for c in risk_components]) if risk_components else "- Nenhum biomarcador de alto risco detectado nos exames analisados."
+        recommended_tests_text = "\n".join(["  \u2022 " + t for t in recommended_tests])
+
         # Montagem do relatório formatado
         report_text = f"""
 ================================================================================
@@ -164,7 +167,7 @@ Nível de Triagem / Urgência: {urgency_level}
 
 1. ACHADOS MULTIMODAIS E BIOMARCADORES DETECTADOS:
 --------------------------------------------------------------------------------
-{patient_str}{chr(10).join(['- ' + c for c in risk_components]) if risk_components else '- Nenhum biomarcador de alto risco detectado nos exames analisados.'}
+{patient_str}{risk_components_text}
 
 2. DADOS ELETROCARDIOGRÁFICOS COMPUTADOS E TELEMETRIA:
 --------------------------------------------------------------------------------
@@ -180,7 +183,7 @@ Nível de Triagem / Urgência: {urgency_level}
 {triage_action}
 
 Exames Complementares de Maior Rendimento Diagnóstico:
-{chr(10).join(['  • ' + t for t in recommended_tests])}
+{recommended_tests_text}
 
 4. DIRETRIZES CLÍNICAS E EVIDÊNCIAS RECUPERADAS (RAG / BASE VETORIAL):
 --------------------------------------------------------------------------------

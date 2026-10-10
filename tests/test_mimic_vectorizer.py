@@ -55,7 +55,7 @@ def test_generate_synthetic_mimic_batch():
     
     assert len(batch) == 50
     for record in batch:
-        assert record["ecg_id"].startswith("MIMIC-")
+        assert record["ecg_id"].startswith("MIMIC-SYN-")
         assert "age" in record and 20 <= record["age"] <= 90
         assert "heart_rate" in record and 40 <= record["heart_rate"] <= 190
         assert record["diagnostic_superclass"] in ["NORM", "MI", "STTC", "CD", "HYP", "AFIB"]

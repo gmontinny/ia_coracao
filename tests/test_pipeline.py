@@ -50,7 +50,7 @@ def test_unified_pipeline_normal_ecgs():
         if p.exists():
             res = pipeline.analyze_image_ecg(str(p))
             assert res['multimodal_prediction']['risk_score'] < 0.35
-            assert res['multimodal_prediction']['risk_tier'] == 'Baixo'
+            assert res['multimodal_prediction']['risk_tier'] == 'Baixo Risco'
             assert res['signal_processing']['metrics']['is_st_abnormal'] is False
 
 

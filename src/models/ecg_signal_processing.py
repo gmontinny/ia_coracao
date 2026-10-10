@@ -11,7 +11,6 @@ import cv2
 import numpy as np
 from scipy.signal import find_peaks, savgol_filter, medfilt
 import matplotlib.pyplot as plt
-import io
 from PIL import Image
 
 # Leitor OCR opcional e Tesseract com inicialização sob demanda para extração de parâmetros telemétricos em quadro inteiro
@@ -81,6 +80,8 @@ class ECGSignalProcessor:
         elif isinstance(image_input, bytes):
             nparr = np.frombuffer(image_input, np.uint8)
             img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            if img is None:
+                raise ValueError("Não foi possível decodificar a imagem a partir dos bytes fornecidos.")
             return img
 
         elif isinstance(image_input, Image.Image):
@@ -133,8 +134,11 @@ class ECGSignalProcessor:
         grid_lines = cv2.bitwise_or(grid_lines_h, grid_lines_v)
 
         # Remove linhas de grade isoladas sem destruir os picos do traçado
-        # (picos QRS são mais espessos)
-        clean_inv = cv2.subtract(inv_thresh, cv2.bitwise_and(grid_lines, cv2.bitwise_not(cv2.morphologyEx(inv_thresh, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))))))
+        # (picos QRS são mais espessos que as linhas de grade)
+        k_thick = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        thick_traces = cv2.morphologyEx(inv_thresh, cv2.MORPH_OPEN, k_thick)
+        grid_only = cv2.bitwise_and(grid_lines, cv2.bitwise_not(thick_traces))
+        clean_inv = cv2.subtract(inv_thresh, grid_only)
 
         trace_gray = cv2.bitwise_not(clean_inv)
         return trace_gray, grid_mask
@@ -209,6 +213,7 @@ class ECGSignalProcessor:
             return meta
 
         all_texts: List[str] = []
+        _ocr_errors: List[str] = []
 
         try:
             # 1. Pré-processamento adaptativo CLAHE para destacar caracteres impressos
@@ -221,57 +226,30 @@ class ECGSignalProcessor:
             br_crop = enhanced_gray[int(h * 0.40):, int(w * 0.40):]
             bl_crop = enhanced_gray[int(h * 0.50):, :int(w * 0.60)]
 
-            # 2. Execução com EasyOCR
+            # 2. Execução com EasyOCR (multi-pass por região)
             if reader is not None:
-                # Pass 1: Imagem inteira com realce CLAHE
-                try:
-                    for t in reader.readtext(enhanced_gray):
-                        all_texts.append(str(t[1]))
-                except Exception:
-                    pass
-
-                # Pass 2: Recorte do rodapé direito (telemetria digital: FC, P, PR, QRS, QT, QTc, SAP, SAQRS)
-                try:
-                    for t in reader.readtext(br_crop):
-                        all_texts.append(str(t[1]))
-                except Exception:
-                    pass
-
-                # Pass 3: Imagem original BGR completa
-                try:
-                    for t in reader.readtext(img_bgr):
-                        all_texts.append(str(t[1]))
-                except Exception:
-                    pass
-
-                # Pass 4: Topo do exame (cabeçalho clássico)
-                try:
-                    for t in reader.readtext(top_crop):
-                        all_texts.append(str(t[1]))
-                except Exception:
-                    pass
-
-                # Pass 5: Rodapé esquerdo (Médico, CRM, RQE)
-                try:
-                    for t in reader.readtext(bl_crop):
-                        all_texts.append(str(t[1]))
-                except Exception:
-                    pass
+                for label, region in [
+                    ('full_clahe', enhanced_gray),
+                    ('bottom_right', br_crop),
+                    ('full_bgr', img_bgr),
+                    ('top', top_crop),
+                    ('bottom_left', bl_crop),
+                ]:
+                    try:
+                        for t in reader.readtext(region):
+                            all_texts.append(str(t[1]))
+                    except Exception as e:
+                        _ocr_errors.append(f"EasyOCR [{label}]: {e}")
 
             # 3. Execução com Pytesseract se disponível
             if pytess is not None:
-                try:
-                    tess_text = pytess.image_to_string(enhanced_gray)
-                    if tess_text:
-                        all_texts.extend(tess_text.splitlines())
-                except Exception:
-                    pass
-                try:
-                    tess_br = pytess.image_to_string(br_crop)
-                    if tess_br:
-                        all_texts.extend(tess_br.splitlines())
-                except Exception:
-                    pass
+                for label, region in [('full', enhanced_gray), ('bottom_right', br_crop)]:
+                    try:
+                        tess_text = pytess.image_to_string(region)
+                        if tess_text:
+                            all_texts.extend(tess_text.splitlines())
+                    except Exception as e:
+                        _ocr_errors.append(f"Pytesseract [{label}]: {e}")
 
             if not all_texts:
                 return meta
@@ -400,18 +378,14 @@ class ECGSignalProcessor:
                     meta['patient_name'] = raw_name
 
             # 15. Nome do Médico / Cardiologista
-            doc_match = re.search(r'(?:FERNANDO\s+POMPEO\s+DE\s+BARROS|POMPEO\s+DE\s+BARROS|[A-Z\s]{4,30}\s+BARROS)', full_text, re.IGNORECASE)
-            if doc_match:
-                meta['doctor_name'] = doc_match.group(0).strip()
-            else:
-                doc_generic = re.search(r'(?:Dr\(?a?\)?\.?|Doutor|Médico|Cardiologista)[:;\s=]*([A-Za-z\s]{4,40})', full_text, re.IGNORECASE)
-                if doc_generic:
-                    clean_doc = doc_generic.group(1).strip()
-                    for prefix in ['la', 'a', 'la)']:
-                        if clean_doc.lower().startswith(prefix + ' '):
-                            clean_doc = clean_doc[len(prefix):].strip()
-                    if len(clean_doc) > 3 and not any(k in clean_doc.upper() for k in ['CARDIOLOGIA', 'HOSPITAL', 'PACIENTE', 'EXAME']):
-                        meta['doctor_name'] = clean_doc
+            doc_generic = re.search(r'(?:Dr\(?a?\)?\.?|Doutor|Médico|Cardiologista)[:;\s=]*([A-Za-zÀ-ú\s]{4,40})', full_text, re.IGNORECASE)
+            if doc_generic:
+                clean_doc = doc_generic.group(1).strip()
+                for prefix in ['la', 'a', 'la)']:
+                    if clean_doc.lower().startswith(prefix + ' '):
+                        clean_doc = clean_doc[len(prefix):].strip()
+                if len(clean_doc) > 3 and not any(k in clean_doc.upper() for k in ['CARDIOLOGIA', 'HOSPITAL', 'PACIENTE', 'EXAME']):
+                    meta['doctor_name'] = clean_doc
 
             # 16. RQE e CRM do Médico
             rqe_match = re.search(r'RQE[:;\s=]*([0-9]{3,6})', full_text, re.IGNORECASE)
@@ -427,8 +401,8 @@ class ECGSignalProcessor:
             if exam_match:
                 meta['exam_number'] = exam_match.group(1).strip()
 
-            # 18. Data e Hora do Exame
-            dt_match = re.search(r'(?:Data|Date)?[:;\s=]*([0-9]{2}/[0-9]{2}/[0-9]{2,4}(?:[-|\s]*[0-9]{2}[:.,][0-9]{2}(?:[:.,][0-9]{2})?)?)', full_text, re.IGNORECASE)
+            # 18. Data e Hora do Exame (requer prefixo explícito para evitar capturar datas de nascimento)
+            dt_match = re.search(r'(?:Data|Date|DT|Hora)[:;\s=]+([0-9]{2}/[0-9]{2}/[0-9]{2,4}(?:[\s-]*[0-9]{2}[:.,][0-9]{2}(?:[:.,][0-9]{2})?)?)', full_text, re.IGNORECASE)
             if dt_match:
                 meta['exam_date'] = dt_match.group(1).strip()
 
@@ -450,8 +424,11 @@ class ECGSignalProcessor:
                 if hosp_match:
                     meta['hospital_clinic'] = hosp_match.group(1).strip()
 
-        except Exception:
-            pass
+        except Exception as e:
+            meta['_ocr_parse_error'] = str(e)
+
+        if _ocr_errors:
+            meta['_ocr_warnings'] = _ocr_errors
 
         return meta
 
@@ -477,16 +454,20 @@ class ECGSignalProcessor:
             roi_eq = equalized
             roi_h = h
 
-        signal = np.zeros(w, dtype=np.float32)
+        # Extração vetorizada: centro de massa vertical por coluna (evita loop Python)
+        # Para colunas com traçado detectado, usa centroide; senão, usa pixel mais escuro
+        col_sums = roi_morph.sum(axis=0)  # (w,)
+        has_trace = col_sums > 0
 
-        for x in range(w):
-            col_pixels = np.where(roi_morph[:, x] > 0)[0]
-            if len(col_pixels) > 0:
-                y_center = np.mean(col_pixels)
-                signal[x] = float(roi_h - y_center)
-            else:
-                darkest_y = np.argmin(roi_eq[:, x])
-                signal[x] = float(roi_h - darkest_y)
+        # Centroide ponderado por coluna onde há traçado
+        row_indices = np.arange(roi_h, dtype=np.float32).reshape(-1, 1)  # (roi_h, 1)
+        weighted_sum = (roi_morph.astype(np.float32) * row_indices).sum(axis=0)  # (w,)
+        centroid_y = np.where(has_trace, weighted_sum / np.maximum(col_sums, 1), 0.0)
+
+        # Para colunas sem traçado, usa pixel mais escuro
+        darkest_y = np.argmin(roi_eq, axis=0).astype(np.float32)  # (w,)
+
+        signal = np.where(has_trace, roi_h - centroid_y, roi_h - darkest_y).astype(np.float32)
 
         # Interpolação para tratar descontinuidades
         zero_indices = np.where(signal == 0)[0]
@@ -495,14 +476,18 @@ class ECGSignalProcessor:
             signal[zero_indices] = np.interp(zero_indices, valid_indices, signal[valid_indices])
 
         # Filtragem digital: Remoção de ruído de alta frequência
-        window_size = min(25, len(signal) if len(signal) % 2 != 0 else len(signal) - 1)
-        if window_size > 5:
+        # window_size deve ser ímpar e >= polyorder + 2
+        raw_window = min(25, len(signal))
+        window_size = raw_window if raw_window % 2 != 0 else raw_window - 1
+        window_size = max(window_size, 7)  # mínimo seguro para polyorder=3
+        if window_size < len(signal):
             signal_smooth = savgol_filter(signal, window_length=window_size, polyorder=3)
         else:
-            signal_smooth = signal
+            signal_smooth = signal.copy()
 
         # Detrending com filtro mediano longo para remover baseline wander (inclinação)
-        med_kernel = min(151, len(signal_smooth) if len(signal_smooth) % 2 != 0 else len(signal_smooth) - 1)
+        raw_med = min(151, len(signal_smooth))
+        med_kernel = raw_med if raw_med % 2 != 0 else raw_med - 1
         if med_kernel > 5:
             trend = medfilt(signal_smooth, kernel_size=med_kernel)
             signal_detrended = signal_smooth - trend
@@ -525,34 +510,34 @@ class ECGSignalProcessor:
         """
         n_samples = len(signal)
         effective_fs = n_samples / max(1.0, duration_sec)
-        
-        # Distância mínima fisiológica entre picos R (~0.30s a 0.35s = ~170-200 bpm max)
+
+        # Distância mínima fisiológica entre picos R (~0.30s = max ~200 bpm)
         min_dist = max(18, int(0.30 * effective_fs))
+        margin = max(8, int(n_samples * 0.025))
 
         # Limiar de altura baseado nos percentis superiores do sinal
         p90 = np.percentile(signal, 90)
         p50 = np.percentile(signal, 50)
         height_thresh = max(0.4, p50 + 0.45 * (p90 - p50))
 
-        peaks, _ = find_peaks(
+        raw_peaks, _ = find_peaks(
             signal,
             distance=min_dist,
             prominence=0.75,
             height=height_thresh
         )
 
-        # Remove picos muito próximos às bordas extremas da imagem (ruído de margem)
-        margin = max(8, int(n_samples * 0.025))
-        valid_peaks = [p for p in peaks if margin <= p <= (n_samples - margin)]
+        # Remove picos próximos às bordas (ruído de margem)
+        valid_peaks = [pk for pk in raw_peaks if margin <= pk <= (n_samples - margin)]
 
         if len(valid_peaks) < 2:
             # Fallback adaptativo com menor proeminência
-            peaks_fallback, _ = find_peaks(
+            fallback_peaks, _ = find_peaks(
                 signal,
                 distance=max(15, int(0.25 * effective_fs)),
                 prominence=0.40
             )
-            valid_peaks = [p for p in peaks_fallback if margin <= p <= (n_samples - margin)]
+            valid_peaks = [pk for pk in fallback_peaks if margin <= pk <= (n_samples - margin)]
 
         return np.array(valid_peaks, dtype=int)
 
@@ -655,9 +640,8 @@ class ECGSignalProcessor:
             rhythm_severity = "Normal"
             rhythm_risk = 0.10
 
-        # Risco global calibrado do sinal (0.05 a 0.95)
-        risk_score = 0.65 * st_risk + 0.35 * rhythm_risk
-        risk_score = float(np.clip(risk_score, 0.08, 0.92))
+        # Risco global calibrado do sinal (pesos: ST 65%, Ritmo 35%)
+        risk_score = float(np.clip(0.65 * st_risk + 0.35 * rhythm_risk, 0.08, 0.92))
 
         return {
             'heart_rate_bpm': round(float(final_hr_bpm), 1),
@@ -688,14 +672,15 @@ class ECGSignalProcessor:
         """
         img_bgr = self.load_image(image_input)
         h, w = img_bgr.shape[:2]
-        
-        # 1. Extração de metadados do cabeçalho
+
+        # 1. Extração de metadados do cabeçalho (OCR)
         header_meta = self.extract_header_metadata(img_bgr)
-        
-        # 2. Pré-processamento e filtragem
-        equalized, morph = self.preprocess_image(img_bgr)
+
+        # 2. Pré-processamento: remove grade HSV e gera máscara morfológica
+        # remove_grid_hsv é chamado internamente por preprocess_image — evitar chamada dupla
         trace_gray, grid_mask = self.remove_grid_hsv(img_bgr)
-        
+        equalized, morph = self.preprocess_image(img_bgr)
+
         # 3. Extração do sinal 1D
         signal = self.extract_1d_signal(img_bgr)
         
