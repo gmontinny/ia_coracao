@@ -6,11 +6,13 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
-# Instalação de dependências de sistema essenciais (OpenCV headless, compilação básica)
+# Instalação de dependências de sistema essenciais (OpenCV headless, Tesseract OCR, compilação básica)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libgl1 \
     libglib2.0-0 \
+    tesseract-ocr \
+    tesseract-ocr-por \
     curl \
     && rm -rf /var/lib/apt/lists/*
 

@@ -142,12 +142,15 @@ Para que o pipeline de Visão Computacional, YOLO e Processamento Digital de Sin
 
 ## 🔍 Leitura Óptica Telemétrica em Quadro Inteiro e Calibração de FC
 
-O sistema incorpora um motor de visão e OCR adaptativo (`extract_header_metadata`) capaz de inspecionar a **imagem inteira** (cabeçalho, rodapé ou margens laterais), sem depender de um layout estático fixo:
+O sistema incorpora um motor de visão e OCR adaptativo multi-pass (`extract_header_metadata` com EasyOCR e Pytesseract) capaz de inspecionar a **imagem inteira** (cabeçalho superior, rodapé inferior esquerdo/direito, caixas de telemetria ou margens laterais), sem depender de um layout estático fixo:
 
-* **Detecção Automática de Parâmetros Impressos:**
-  - **Frequência Cardíaca (FC):** Extração de valores telemétricos oficiais (ex.: `FC: 84 bpm` em `giovanny_01.png`).
-  - **Dados Cadastrais do Paciente:** Nome completo, idade (ex.: `50 anos` em `giovanny_02.png`), data do exame e instituição hospitalar.
-  - **Intervalos Eletrocardiográficos e Eixo:** `PR`, `QRS`, `QT/QTc`, `SÂQRS (Eixo Elétrico)` e velocidade de impressão ($25\,\text{mm/s}$ ou $50\,\text{mm/s}$).
+* **Detecção Automática de Parâmetros Impressos e Telemetria Completa:**
+  - **Frequência Cardíaca (FC):** Extração de valores telemétricos oficiais (ex.: `FC: 95 bpm` em `giovanny_03.jpg`, `FC: 84 bpm` em `giovanny_01.png`).
+  - **Onda P e Intervalos:** Duração da onda P (`P: 118 ms`), intervalo PR (`PR: 175 ms / 118 ms`), duração do QRS (`QRS: 96 ms / 75 ms`) e intervalos QT/QTc (`QT: 346 ms`, `QTc / QTo: 435 ms`).
+  - **Eixos Elétricos Cardíacos:** Eixo de onda P (`SÂP / SAP`), eixo elétrico ventricular (`SÂQRS / SAQRS: 75°`) e eixo de onda T (`SÂT / SAT`).
+  - **Dados Cadastrais e Rastreabilidade:** Nome do paciente (`GIOVANNY MONTINNY DE ALMEIDA DANTAS`), idade (`50 anos`), data de nascimento (`13/04/1976`), número do exame (`0000016791` / `62661`), data/hora (`01/09/26 09:03`), instituição hospitalar (`BOM CORAÇÃO CARDIOLOGIA` / `HOSPITAL AMECOR`).
+  - **Corpo Clínico e Registro Profissional:** Médico responsável (`Dr(a). FERNANDO POMPEO DE BARROS`), `CRM` (`CRM-MT`) e Registro de Qualificação de Especialista em Cardiologia (`RQE: 2518`).
+  - **Configurações de Aquisição:** Velocidade do papel ($25\,\text{mm/s}$ ou $50\,\text{mm/s}$), ganho de voltagem ($10\,\text{mm/mV}$ ou $N/2 = 5\,\text{mm/mV}$) e filtros de sinal (`Rede 60Hz / Filtro Muscular`).
 * **Calibração Temporal e Validação Cruzada do Sinal:**
   - **Janela Padrão de 10 Segundos:** Páginas de 12 derivações utilizam calibração temporal de aquisição contínua ($fs = \text{largura} / 10.0\,\text{s}$).
   - **Período Refratário Fisiológico:** Distância mínima entre picos ajustada para $\ge 300\,\text{ms}$ ($\le 200\,\text{bpm}$), prevenindo falsos picos em ondas T ou ruídos de grade.

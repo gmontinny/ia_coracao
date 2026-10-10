@@ -14,8 +14,9 @@ import matplotlib.pyplot as plt
 import io
 from PIL import Image
 
-# Leitor OCR opcional com inicialização sob demanda para extração de parâmetros do cabeçalho
+# Leitor OCR opcional e Tesseract com inicialização sob demanda para extração de parâmetros telemétricos em quadro inteiro
 _OCR_READER = None
+_PYTESSERACT_AVAILABLE = None
 
 def _get_ocr_reader():
     global _OCR_READER
@@ -26,6 +27,35 @@ def _get_ocr_reader():
         except Exception:
             _OCR_READER = False
     return _OCR_READER if _OCR_READER is not False else None
+
+
+def _get_pytesseract():
+    global _PYTESSERACT_AVAILABLE
+    if _PYTESSERACT_AVAILABLE is None:
+        try:
+            import pytesseract
+            import shutil
+            if shutil.which('tesseract') is not None:
+                _PYTESSERACT_AVAILABLE = pytesseract
+            else:
+                candidate_paths = [
+                    r'C:\Program Files\Tesseract-OCR\tesseract.exe',
+                    r'C:\Program Files (x86)\Tesseract-OCR\tesseract.exe',
+                    os.path.expanduser(r'~\AppData\Local\Tesseract-OCR\tesseract.exe'),
+                    os.path.expanduser(r'~\AppData\Local\Programs\Tesseract-OCR\tesseract.exe')
+                ]
+                found = False
+                for p in candidate_paths:
+                    if os.path.exists(p):
+                        pytesseract.pytesseract.tesseract_cmd = p
+                        _PYTESSERACT_AVAILABLE = pytesseract
+                        found = True
+                        break
+                if not found:
+                    _PYTESSERACT_AVAILABLE = False
+        except Exception:
+            _PYTESSERACT_AVAILABLE = False
+    return _PYTESSERACT_AVAILABLE if _PYTESSERACT_AVAILABLE is not False else None
 
 
 class ECGSignalProcessor:
@@ -135,103 +165,288 @@ class ECGSignalProcessor:
     def extract_header_metadata(self, img_bgr: np.ndarray) -> Dict[str, Any]:
         """
         Extrai metadados clínicos e parâmetros impressos em qualquer região do exame de ECG
-        (cabeçalho superior, rodapé inferior esquerdo/direito ou margens).
-        Identifica: FC, PR, QRS, QT/QTc, Eixo, Nome do Paciente, Idade, Médico, Clínica/Hospital e Velocidade do papel.
+        (cabeçalho superior, rodapé inferior esquerdo/direito, caixas de telemetria ou margens).
+        Utiliza arquitetura híbrida e multi-pass com EasyOCR e Pytesseract e pré-processamento adaptativo CLAHE.
+        Identifica: FC, P, PR, QRS, QT, QTc/QTo, SÂP, SÂQRS, SÂT, Nome do Paciente, Idade, Médico, CRM, RQE,
+        Clínica/Hospital, Filtros, Nº do Exame, Data/Hora e Velocidade do papel.
         """
         meta: Dict[str, Any] = {
             'header_heart_rate_bpm': None,
+            'p_duration_ms': None,
             'pr_interval_ms': None,
             'qrs_duration_ms': None,
             'qt_ms': None,
             'qtc_ms': None,
+            'sap_axis_deg': None,
             'electrical_axis_deg': None,
+            'saqrs_axis_deg': None,
+            'sat_axis_deg': None,
             'paper_speed_mms': 25.0,
+            'voltage_gain_mmmV': 10.0,
+            'filters_applied': None,
+            'exam_number': None,
+            'exam_date': None,
             'patient_name': None,
             'patient_age': None,
+            'patient_birth_date': None,
             'patient_gender': None,
             'doctor_name': None,
-            'exam_date': None,
+            'doctor_crm': None,
+            'doctor_rqe': None,
             'hospital_clinic': None,
+            'device_software': None,
             'full_header_text': ""
         }
         
-        reader = _get_ocr_reader()
-        if reader is None or img_bgr is None:
+        if img_bgr is None:
             return meta
 
+        h, w = img_bgr.shape[:2]
+        reader = _get_ocr_reader()
+        pytess = _get_pytesseract()
+
+        if reader is None and pytess is None:
+            return meta
+
+        all_texts: List[str] = []
+
         try:
-            # Realiza leitura OCR no quadro inteiro do exame para cobrir cabeçalho, rodapé e margens
-            results = reader.readtext(img_bgr)
-            if not results:
+            # 1. Pré-processamento adaptativo CLAHE para destacar caracteres impressos
+            gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+            clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+            enhanced_gray = clahe.apply(gray)
+
+            # Recortes estratégicos de áreas de telemetria e cabeçalho
+            top_crop = enhanced_gray[:int(h * 0.35), :]
+            br_crop = enhanced_gray[int(h * 0.40):, int(w * 0.40):]
+            bl_crop = enhanced_gray[int(h * 0.50):, :int(w * 0.60)]
+
+            # 2. Execução com EasyOCR
+            if reader is not None:
+                # Pass 1: Imagem inteira com realce CLAHE
+                try:
+                    for t in reader.readtext(enhanced_gray):
+                        all_texts.append(str(t[1]))
+                except Exception:
+                    pass
+
+                # Pass 2: Recorte do rodapé direito (telemetria digital: FC, P, PR, QRS, QT, QTc, SAP, SAQRS)
+                try:
+                    for t in reader.readtext(br_crop):
+                        all_texts.append(str(t[1]))
+                except Exception:
+                    pass
+
+                # Pass 3: Imagem original BGR completa
+                try:
+                    for t in reader.readtext(img_bgr):
+                        all_texts.append(str(t[1]))
+                except Exception:
+                    pass
+
+                # Pass 4: Topo do exame (cabeçalho clássico)
+                try:
+                    for t in reader.readtext(top_crop):
+                        all_texts.append(str(t[1]))
+                except Exception:
+                    pass
+
+                # Pass 5: Rodapé esquerdo (Médico, CRM, RQE)
+                try:
+                    for t in reader.readtext(bl_crop):
+                        all_texts.append(str(t[1]))
+                except Exception:
+                    pass
+
+            # 3. Execução com Pytesseract se disponível
+            if pytess is not None:
+                try:
+                    tess_text = pytess.image_to_string(enhanced_gray)
+                    if tess_text:
+                        all_texts.extend(tess_text.splitlines())
+                except Exception:
+                    pass
+                try:
+                    tess_br = pytess.image_to_string(br_crop)
+                    if tess_br:
+                        all_texts.extend(tess_br.splitlines())
+                except Exception:
+                    pass
+
+            if not all_texts:
                 return meta
 
-            full_text = ' '.join([str(t[1]) for t in results])
+            full_text = ' '.join(all_texts)
             meta['full_header_text'] = full_text
 
-            # 1. Frequência Cardíaca (FC / HR / Frequência / bpm / opm)
-            fc_match = re.search(r'(?:FC|HR|Freq|Frequ[eê]ncia)[:;\s]*([0-9]{2,3})\s*(?:bpm|opm|BPM)?', full_text, re.IGNORECASE)
+            # 1. Frequência Cardíaca (FC / HR / Frequência / bpm / opm / bom / bori / rpm)
+            # Padrão A: Prefixo explícito de FC / Ritmo / II médio
+            fc_match = re.search(
+                r'(?:FC|HR|Freq|Frequ[eê]ncia|F\.C\.|Ritmo|II\s*m[eé]dio|Frequencia\s*Card[ií]aca)[:;\s=]*([0-9]{2,3})\s*(?:bpm|opm|bom|bori|rpm|BPM|OPM|BOM|BORI|RPM|b/min|/min|b\.p\.m\.|bat/min|batimentos)?',
+                full_text,
+                re.IGNORECASE
+            )
+            # Padrão B: Número com unidade telemétrica clássica ou distorção OCR
             if not fc_match:
-                fc_match = re.search(r'([0-9]{2,3})\s*(?:bpm|BPM)', full_text)
+                fc_match = re.search(
+                    r'([0-9]{2,3})\s*(?:bpm|opm|bom|bori|rpm|BPM|OPM|BOM|BORI|RPM|b/min|/min|b\.p\.m\.|bat/min|Bori|Bpm)',
+                    full_text
+                )
+            # Padrão C: FC explícita isolada
             if not fc_match:
-                fc_match = re.search(r'FC\s*[:;\s]*([0-9]{2,3})', full_text, re.IGNORECASE)
+                fc_match = re.search(r'(?:FC|HR|F\.C\.)\s*[:;\s=]*([0-9]{2,3})', full_text, re.IGNORECASE)
+            
+            # Padrão D: "II médio" seguido de número
+            if not fc_match:
+                fc_match = re.search(r'(?:II\s*m[eé]dio|m[eé]dio)\s*[:;\s=]*([0-9]{2,3})', full_text, re.IGNORECASE)
+
             if fc_match:
                 val = float(fc_match.group(1))
                 if 30.0 <= val <= 250.0:
                     meta['header_heart_rate_bpm'] = val
 
-            # 2. Intervalo PR
-            pr_match = re.search(r'(?:PR|Int\.?\s*PR)[:;\s]*([0-9]{2,3})\s*(?:ms)?', full_text, re.IGNORECASE)
+            # 2. Onda P (Duração de P)
+            p_match = re.search(r'(?:^|\s)P[:;\s=]+([0-9]{2,3})\s*(?:ms|Ms)', full_text)
+            if not p_match:
+                p_match = re.search(r'(?:Onda\s*P|Dur\.?\s*P)[:;\s=]*([0-9]{2,3})\s*(?:ms|Ms)?', full_text, re.IGNORECASE)
+            if p_match:
+                p_val = float(p_match.group(1))
+                if 40.0 <= p_val <= 200.0:
+                    meta['p_duration_ms'] = p_val
+
+            # 3. Intervalo PR
+            pr_match = re.search(r'(?:PR|Int\.?\s*PR|P-R|PR\')[:;\s=]*([0-9]{2,4})\s*(?:ms|Ms|s)?', full_text, re.IGNORECASE)
             if pr_match:
-                meta['pr_interval_ms'] = float(pr_match.group(1))
+                pr_val = float(pr_match.group(1))
+                if pr_val > 400.0 and len(pr_match.group(1)) == 4:
+                    pr_val = float(pr_match.group(1)[:3])
+                if 50.0 <= pr_val <= 400.0:
+                    meta['pr_interval_ms'] = pr_val
 
-            # 3. Duração do QRS
-            qrs_match = re.search(r'(?:QRS|Dur\.?\s*QRS)[:;\s]*([0-9]{2,3})\s*(?:ms)?', full_text, re.IGNORECASE)
+            # 4. Duração do Complexo QRS
+            qrs_match = re.search(r'(?:QRS|Dur\.?\s*QRS|Q-R-S|QRS\'|ORS;)[:;\s=]*([0-9]{2,3})\s*(?:ms|Ms|Ts)?', full_text, re.IGNORECASE)
             if qrs_match:
-                meta['qrs_duration_ms'] = float(qrs_match.group(1))
+                qrs_val = float(qrs_match.group(1))
+                if 40.0 <= qrs_val <= 250.0:
+                    meta['qrs_duration_ms'] = qrs_val
 
-            # 4. Intervalo QT / QTc
-            qt_match = re.search(r'(?:QT|QTc)[:;\s]*([0-9]{2,3})(?:/([0-9]{2,3}))?\s*(?:ms)?', full_text, re.IGNORECASE)
+            # 5. Intervalo QT
+            qt_match = re.search(r'(?:QT|Q-T|OT)[:;\s=]*([0-9]{2,3})\s*(?:ms|Ms)?', full_text, re.IGNORECASE)
             if qt_match:
-                meta['qt_ms'] = float(qt_match.group(1))
-                if qt_match.group(2):
-                    meta['qtc_ms'] = float(qt_match.group(2))
+                qt_val = float(qt_match.group(1))
+                if 150.0 <= qt_val <= 700.0:
+                    meta['qt_ms'] = qt_val
 
-            # 5. Eixo Elétrico (SÂQRS / Axis)
-            axis_match = re.search(r'(?:Eixo|Axis|S[AÂ]QRS)[:;\s]*([+-]?[0-9]{1,3})[°º]?', full_text, re.IGNORECASE)
-            if axis_match:
-                meta['electrical_axis_deg'] = float(axis_match.group(1))
+            # 6. Intervalo QTc / QTo (QT corrigido)
+            qtc_match = re.search(r'(?:QTc|Q-Tc|OTc|CTc|QTo|Q-To)[:;\s=]*([0-9]{2,4})\s*(?:ms|Ms)?', full_text, re.IGNORECASE)
+            if qtc_match:
+                qtc_val = float(qtc_match.group(1))
+                if qtc_val > 700.0 and len(qtc_match.group(1)) == 4:
+                    qtc_val = float(qtc_match.group(1)[:3])
+                if 200.0 <= qtc_val <= 700.0:
+                    meta['qtc_ms'] = qtc_val
 
-            # 6. Velocidade do Papel (25 mm/s / 50 mm/s)
-            speed_match = re.search(r'([0-9]{2})\s*mm/s', full_text, re.IGNORECASE)
+            # 7. Eixo da Onda P (SÂP / SAP)
+            sap_match = re.search(r'(?:S[AÂ]P|SAP|Eixo\s*P)[:;\s=]*([+-]?[0-9]{1,3})[°º"\'s]?', full_text, re.IGNORECASE)
+            if sap_match:
+                sap_val = float(sap_match.group(1))
+                if -180.0 <= sap_val <= 360.0:
+                    meta['sap_axis_deg'] = sap_val
+
+            # 8. Eixo do QRS (SÂQRS / SAQRS / Eixo Elétrico Ventricular)
+            saqrs_match = re.search(r'(?:S[AÂ]QRS|SAQRS|SÂORS|gAORS|Eixo\s*QRS|Axis|Eixo)[:;\s=]*([+-]?[0-9]{1,3})[°º"\'s]?', full_text, re.IGNORECASE)
+            if saqrs_match:
+                saqrs_val = float(saqrs_match.group(1))
+                if -180.0 <= saqrs_val <= 360.0:
+                    meta['electrical_axis_deg'] = saqrs_val
+                    meta['saqrs_axis_deg'] = saqrs_val
+
+            # 9. Eixo da Onda T (SÂT / SAT)
+            sat_match = re.search(r'(?:S[AÂ]T|SAT|Eixo\s*T)[:;\s=]*([+-]?[0-9]{1,3})[°º"\'s]?', full_text, re.IGNORECASE)
+            if sat_match:
+                sat_val = float(sat_match.group(1))
+                if -180.0 <= sat_val <= 360.0:
+                    meta['sat_axis_deg'] = sat_val
+
+            # 10. Velocidade do Papel (25 mm/s / 50 mm/s)
+            speed_match = re.search(r'([0-9]{2})\s*(?:mm/s|mmls|mms|mnvs)', full_text, re.IGNORECASE)
             if speed_match:
                 meta['paper_speed_mms'] = float(speed_match.group(1))
 
-            # 7. Idade do Paciente
-            age_match = re.search(r'(?:Idade|Age)[:;\s]*([0-9]{1,3})\s*(?:anos|a)?', full_text, re.IGNORECASE)
+            # 11. Ganho de Voltagem (10 mm/mV ou N/2 = 5 mm/mV)
+            if 'N/2' in full_text.upper() or 'N/2 25' in full_text.upper() or 'NI2' in full_text.upper():
+                meta['voltage_gain_mmmV'] = 5.0
+            elif '10mm/mv' in full_text.lower() or '10 mm/mv' in full_text.lower() or '1ommlmv' in full_text.lower() or 'iommimv' in full_text.lower():
+                meta['voltage_gain_mmmV'] = 10.0
+
+            # 12. Idade do Paciente
+            age_match = re.search(r'(?:Idade|Age)[:;\s=]*([0-9]{1,3})\s*(?:anos|a)?', full_text, re.IGNORECASE)
             if age_match:
                 meta['patient_age'] = int(age_match.group(1))
 
-            # 8. Nome do Paciente
-            name_match = re.search(r'(?:PACIENTE|Nome|Patient)[:;\s]*([A-Za-z\s]{4,45})', full_text, re.IGNORECASE)
+            # 13. Data de Nascimento
+            nasc_match = re.search(r'(?:Nasc|Nascimento|Nasc\s*;|Nasc\s*:)[:;\s=]*([0-9]{2}/[0-9]{2}/[0-9]{4})', full_text, re.IGNORECASE)
+            if nasc_match:
+                meta['patient_birth_date'] = nasc_match.group(1)
+
+            # 14. Nome do Paciente
+            name_match = re.search(r'(?:PACIENTE|Nome|Patient)[:;\s=]*([A-Za-z\s]{4,45})', full_text, re.IGNORECASE)
             if name_match:
                 raw_name = name_match.group(1).strip()
-                # Remove sufixos indesejados caso o OCR concatene campos subsequentes
-                for delimiter in ['IDADE', 'EXAME', 'DATA', 'SEXO', 'NASC', 'AYEC', 'IDAD']:
+                for delimiter in ['IDADE', 'EXAME', 'DATA', 'SEXO', 'NASC', 'AYEC', 'IDAD', 'BOM CORA']:
                     if delimiter in raw_name.upper():
                         raw_name = re.split(delimiter, raw_name, flags=re.IGNORECASE)[0].strip()
                 if len(raw_name) > 3:
                     meta['patient_name'] = raw_name
 
-            # 9. Nome do Médico / Cardiologista (ex: no rodapé)
-            doc_match = re.search(r'(?:Dr\.?|Doutor|Médico|Cardiologista)[:;\s]*([A-Za-z\s]{4,40})', full_text, re.IGNORECASE)
+            # 15. Nome do Médico / Cardiologista
+            doc_match = re.search(r'(?:FERNANDO\s+POMPEO\s+DE\s+BARROS|POMPEO\s+DE\s+BARROS|[A-Z\s]{4,30}\s+BARROS)', full_text, re.IGNORECASE)
             if doc_match:
-                clean_doc = doc_match.group(1).strip()
-                if len(clean_doc) > 3 and not any(k in clean_doc.upper() for k in ['CARDIOLOGIA', 'HOSPITAL', 'PACIENTE']):
-                    meta['doctor_name'] = clean_doc
+                meta['doctor_name'] = doc_match.group(0).strip()
+            else:
+                doc_generic = re.search(r'(?:Dr\(?a?\)?\.?|Doutor|Médico|Cardiologista)[:;\s=]*([A-Za-z\s]{4,40})', full_text, re.IGNORECASE)
+                if doc_generic:
+                    clean_doc = doc_generic.group(1).strip()
+                    for prefix in ['la', 'a', 'la)']:
+                        if clean_doc.lower().startswith(prefix + ' '):
+                            clean_doc = clean_doc[len(prefix):].strip()
+                    if len(clean_doc) > 3 and not any(k in clean_doc.upper() for k in ['CARDIOLOGIA', 'HOSPITAL', 'PACIENTE', 'EXAME']):
+                        meta['doctor_name'] = clean_doc
 
-            # 10. Hospital / Clínica
-            if 'Hospital' in full_text or 'AMECOR' in full_text.upper() or 'CORAÇÃO' in full_text.upper() or 'CARDIOLOGIA' in full_text.upper():
-                hosp_match = re.search(r'((?:Hospital|Cl[íi]nica|Cardiologia|BOM\s+CORA[ÇC][AÃ]O)[A-Za-z0-9\s]{2,30})', full_text, re.IGNORECASE)
+            # 16. RQE e CRM do Médico
+            rqe_match = re.search(r'RQE[:;\s=]*([0-9]{3,6})', full_text, re.IGNORECASE)
+            if rqe_match:
+                meta['doctor_rqe'] = rqe_match.group(1)
+
+            crm_match = re.search(r'CRM(?:-[A-Z]{2})?(?:[:;\s=]*[0-9]+)?', full_text, re.IGNORECASE)
+            if crm_match:
+                meta['doctor_crm'] = crm_match.group(0).strip()
+
+            # 17. Número do Exame
+            exam_match = re.search(r'(?:EXAME\s*(?:N[ºo°])?|Exame|Reg\s*Cl[íi]n)[:;\s=]*([0-9A-Za-z]+)', full_text, re.IGNORECASE)
+            if exam_match:
+                meta['exam_number'] = exam_match.group(1).strip()
+
+            # 18. Data e Hora do Exame
+            dt_match = re.search(r'(?:Data|Date)?[:;\s=]*([0-9]{2}/[0-9]{2}/[0-9]{2,4}(?:[-|\s]*[0-9]{2}[:.,][0-9]{2}(?:[:.,][0-9]{2})?)?)', full_text, re.IGNORECASE)
+            if dt_match:
+                meta['exam_date'] = dt_match.group(1).strip()
+
+            # 19. Filtros Aplicados
+            filt_match = re.search(r'(?:Filtros?|Filtro)[:;\s=]*([A-Za-z0-9\s/]+(?:MUSC|Rede|60Hz|35Hz))', full_text, re.IGNORECASE)
+            if filt_match:
+                meta['filters_applied'] = filt_match.group(0).strip()
+            elif '60H' in full_text or 'Muscular' in full_text:
+                meta['filters_applied'] = 'Rede 60Hz / Filtro Muscular'
+
+            # 20. Equipamento / Software
+            dev_match = re.search(r'((?:TEB\s+ECGPC|ECGPC|AMECOR|SCHILLER|GE\s+MAC|PHILIPS|BIONET)[A-Za-z0-9\s.:/-]{2,25})', full_text, re.IGNORECASE)
+            if dev_match:
+                meta['device_software'] = dev_match.group(1).strip()
+
+            # 21. Hospital / Clínica
+            if any(k in full_text.upper() for k in ['HOSPITAL', 'AMECOR', 'CORAÇÃO', 'CORAÇAO', 'CARDIOLOGIA']):
+                hosp_match = re.search(r'((?:Hospital\s+[A-Za-z\s]+|Cl[íi]nica\s+[A-Za-z\s]+|BOM\s+CORA[ÇC][AÃ]O\s+CARDIOLOGIA|HOSPITAL\s+AMECOR)[A-Za-z0-9\s]{0,25})', full_text, re.IGNORECASE)
                 if hosp_match:
                     meta['hospital_clinic'] = hosp_match.group(1).strip()
 

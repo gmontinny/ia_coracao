@@ -86,9 +86,35 @@ def test_giovanny_01_heart_rate_and_header_extraction():
     processor = ECGSignalProcessor(sampling_rate_hz=500)
     res = processor.process_ecg_image(str(img_path))
     metrics = res['metrics']
+    meta = res['header_metadata']
     
     # FC deve ser 84 bpm (ou muito próxima) e não mais 160 bpm
     assert abs(metrics['heart_rate_bpm'] - 84.0) <= 2.0
     assert metrics['rhythm_classification'] == 'Ritmo Sinusal Regular'
+    assert metrics['st_condition'] == 'Normal / Isoelétrico Fisiológico'
+    assert metrics['risk_score'] < 0.35
+    assert meta.get('patient_name') is not None
+
+
+def test_giovanny_03_telemetry_and_fc_extraction():
+    """Valida a extração de telemetria rica (FC 95 bpm, P, PR, QRS, QT, QTc, SAP, SAQRS) em giovanny_03.jpg."""
+    img_path = Path("img/giovanny_03.jpg")
+    if not img_path.exists():
+        pytest.skip("img/giovanny_03.jpg não encontrado")
+
+    processor = ECGSignalProcessor(sampling_rate_hz=500)
+    res = processor.process_ecg_image(str(img_path))
+    metrics = res['metrics']
+    meta = res['header_metadata']
+    
+    # Validações estritas de telemetria
+    assert abs(metrics['heart_rate_bpm'] - 95.0) <= 1.0
+    assert meta.get('header_heart_rate_bpm') == 95.0
+    assert meta.get('patient_name') is not None
+    assert meta.get('patient_age') == 50
+    assert meta.get('qt_ms') is not None
+    assert meta.get('qtc_ms') is not None
+    assert meta.get('electrical_axis_deg') is not None or meta.get('saqrs_axis_deg') is not None
+    assert meta.get('doctor_name') is not None or meta.get('doctor_rqe') == '2518'
     assert metrics['st_condition'] == 'Normal / Isoelétrico Fisiológico'
     assert metrics['risk_score'] < 0.35

@@ -237,17 +237,53 @@ def main():
 
                 st.markdown("### 📈 Resultados da Extração e Diagnóstico Calibrado")
 
-                # Exibe alerta/banner informativo se o cabeçalho tiver dados telemétricos oficiais
-                if header_meta.get('header_heart_rate_bpm') or header_meta.get('patient_name'):
+                # Exibe alerta/banner informativo se o exame tiver dados telemétricos e cadastrais lidos por OCR
+                if header_meta.get('header_heart_rate_bpm') or header_meta.get('patient_name') or header_meta.get('pr_interval_ms'):
+                    info_items = []
+                    if header_meta.get('patient_name'):
+                        info_items.append(f"Paciente: **{header_meta['patient_name']}**")
+                    if header_meta.get('patient_age'):
+                        info_items.append(f"Idade: **{header_meta['patient_age']} anos**")
+                    if header_meta.get('patient_birth_date'):
+                        info_items.append(f"Nasc: **{header_meta['patient_birth_date']}**")
+                    if header_meta.get('exam_number'):
+                        info_items.append(f"Exame: **{header_meta['exam_number']}**")
+                    if header_meta.get('header_heart_rate_bpm'):
+                        info_items.append(f"FC Telemetria: **{header_meta['header_heart_rate_bpm']} BPM**")
+                    if header_meta.get('p_duration_ms'):
+                        info_items.append(f"P: **{header_meta['p_duration_ms']} ms**")
+                    if header_meta.get('pr_interval_ms'):
+                        info_items.append(f"PR: **{header_meta['pr_interval_ms']} ms**")
+                    if header_meta.get('qrs_duration_ms'):
+                        info_items.append(f"QRS: **{header_meta['qrs_duration_ms']} ms**")
+                    if header_meta.get('qt_ms') or header_meta.get('qtc_ms'):
+                        qt_txt = f"{header_meta.get('qt_ms', 'N/A')}"
+                        qtc_txt = f" / {header_meta.get('qtc_ms')} ms" if header_meta.get('qtc_ms') else " ms"
+                        info_items.append(f"QT/QTc (QTo): **{qt_txt}{qtc_txt}**")
+                    if header_meta.get('sap_axis_deg') is not None:
+                        info_items.append(f"SÂP: **{header_meta['sap_axis_deg']}°**")
+                    if header_meta.get('electrical_axis_deg') is not None or header_meta.get('saqrs_axis_deg') is not None:
+                        ax_v = header_meta.get('electrical_axis_deg') if header_meta.get('electrical_axis_deg') is not None else header_meta.get('saqrs_axis_deg')
+                        info_items.append(f"SÂQRS: **{ax_v}°**")
+                    if header_meta.get('sat_axis_deg') is not None:
+                        info_items.append(f"SÂT: **{header_meta['sat_axis_deg']}°**")
+                    if header_meta.get('doctor_name'):
+                        doc_txt = f"Médico: **{header_meta['doctor_name']}**"
+                        if header_meta.get('doctor_crm'):
+                            doc_txt += f" ({header_meta['doctor_crm']})"
+                        if header_meta.get('doctor_rqe'):
+                            doc_txt += f" [RQE: {header_meta['doctor_rqe']}]"
+                        info_items.append(doc_txt)
+                    if header_meta.get('hospital_clinic'):
+                        info_items.append(f"Local: **{header_meta['hospital_clinic']}**")
+                    if header_meta.get('paper_speed_mms'):
+                        info_items.append(f"Velocidade: **{header_meta['paper_speed_mms']} mm/s**")
+                    if header_meta.get('filters_applied'):
+                        info_items.append(f"Filtros: **{header_meta['filters_applied']}**")
+
                     st.success(
-                        f"📋 **Parâmetros Lidos do Cabeçalho do Exame:** "
-                        f"{'Paciente: **' + str(header_meta.get('patient_name')) + '** | ' if header_meta.get('patient_name') else ''}"
-                        f"{'Idade: **' + str(header_meta.get('patient_age')) + ' anos** | ' if header_meta.get('patient_age') else ''}"
-                        f"{'FC Cabeçalho: **' + str(header_meta.get('header_heart_rate_bpm')) + ' BPM** | ' if header_meta.get('header_heart_rate_bpm') else ''}"
-                        f"{'PR: **' + str(header_meta.get('pr_interval_ms')) + ' ms** | ' if header_meta.get('pr_interval_ms') else ''}"
-                        f"{'QRS: **' + str(header_meta.get('qrs_duration_ms')) + ' ms** | ' if header_meta.get('qrs_duration_ms') else ''}"
-                        f"{'QT/QTc: **' + str(header_meta.get('qt_ms')) + ' ms** | ' if header_meta.get('qt_ms') else ''}"
-                        f"Velocidade: **{header_meta.get('paper_speed_mms', 25.0)} mm/s**"
+                        f"📋 **Parâmetros e Telemetria Lidos da Imagem (Quadro Inteiro / OCR):**\n\n"
+                        + " • ".join(info_items)
                     )
 
                 # Métricas em Cards

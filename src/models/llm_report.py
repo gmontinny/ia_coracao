@@ -95,22 +95,62 @@ class ECGClinicalReportGenerator:
         )
         rag_citations_text = self.rag_engine.format_rag_citations(retrieved_guidelines)
 
-        # Metadados do cabeçalho
+        # Metadados do cabeçalho e telemetria completa
         header_meta = ecg_metrics.get('header_metadata', {}) if ecg_metrics else {}
-        header_hr_str = f" (Cabeçalho: {header_meta.get('header_heart_rate_bpm')} BPM)" if header_meta.get('header_heart_rate_bpm') else ""
-        patient_str = f"- Identificação / Paciente: {header_meta.get('patient_name')}\n" if header_meta.get('patient_name') else ""
+        header_hr_str = f" (Cabeçalho/Telemetria: {header_meta.get('header_heart_rate_bpm')} BPM)" if header_meta.get('header_heart_rate_bpm') else ""
+        
+        patient_info_lines = []
+        if header_meta.get('patient_name'):
+            patient_info_lines.append(f"- Paciente: {header_meta['patient_name']}")
         if patient_data and patient_data.get('Age'):
-            patient_str += f"- Idade do Paciente: {patient_data.get('Age')} anos\n"
+            patient_info_lines.append(f"- Idade: {patient_data['Age']} anos")
         elif header_meta.get('patient_age'):
-            patient_str += f"- Idade do Paciente: {header_meta.get('patient_age')} anos\n"
+            patient_info_lines.append(f"- Idade: {header_meta['patient_age']} anos")
+        if header_meta.get('patient_birth_date'):
+            patient_info_lines.append(f"- Data de Nascimento: {header_meta['patient_birth_date']}")
+        if header_meta.get('exam_number'):
+            patient_info_lines.append(f"- Exame Nº: {header_meta['exam_number']}")
+        if header_meta.get('exam_date'):
+            patient_info_lines.append(f"- Data/Hora do Exame: {header_meta['exam_date']}")
+        if header_meta.get('hospital_clinic'):
+            patient_info_lines.append(f"- Instituição / Clínica: {header_meta['hospital_clinic']}")
+        if header_meta.get('doctor_name'):
+            doc_str = f"- Médico Responsável: {header_meta['doctor_name']}"
+            if header_meta.get('doctor_crm'):
+                doc_str += f" | {header_meta['doctor_crm']}"
+            if header_meta.get('doctor_rqe'):
+                doc_str += f" | RQE: {header_meta['doctor_rqe']}"
+            patient_info_lines.append(doc_str)
+        if header_meta.get('device_software'):
+            patient_info_lines.append(f"- Equipamento / Sistema: {header_meta['device_software']}")
+        if header_meta.get('filters_applied'):
+            patient_info_lines.append(f"- Filtros de Aquisição: {header_meta['filters_applied']}")
 
-        intervals_str = ""
+        patient_str = "\n".join(patient_info_lines) + ("\n" if patient_info_lines else "")
+
+        # Linhas de telemetria de ondas e intervalos
+        telemetry_lines = []
+        if header_meta.get('p_duration_ms'):
+            telemetry_lines.append(f"- Duração da Onda P: {header_meta['p_duration_ms']} ms (Normal: 80-120 ms)")
         if header_meta.get('pr_interval_ms'):
-            intervals_str += f"- Intervalo PR: {header_meta.get('pr_interval_ms')} ms\n"
+            telemetry_lines.append(f"- Intervalo PR: {header_meta['pr_interval_ms']} ms (Normal: 120-200 ms)")
         if header_meta.get('qrs_duration_ms'):
-            intervals_str += f"- Duração QRS: {header_meta.get('qrs_duration_ms')} ms\n"
-        if header_meta.get('qt_ms'):
-            intervals_str += f"- Intervalo QT/QTc: {header_meta.get('qt_ms')}{' / ' + str(header_meta.get('qtc_ms')) if header_meta.get('qtc_ms') else ''} ms\n"
+            telemetry_lines.append(f"- Duração do Complexo QRS: {header_meta['qrs_duration_ms']} ms (Normal: 70-110 ms)")
+        if header_meta.get('qt_ms') or header_meta.get('qtc_ms'):
+            qt_val = f"{header_meta.get('qt_ms')} ms" if header_meta.get('qt_ms') else "N/A"
+            qtc_val = f"{header_meta.get('qtc_ms')} ms" if header_meta.get('qtc_ms') else "N/A"
+            telemetry_lines.append(f"- Intervalos QT / QTc (QTo): {qt_val} / {qtc_val}")
+        if header_meta.get('sap_axis_deg') is not None:
+            telemetry_lines.append(f"- Eixo da Onda P (SÂP / SAP): {header_meta['sap_axis_deg']}°")
+        if header_meta.get('electrical_axis_deg') is not None or header_meta.get('saqrs_axis_deg') is not None:
+            axis_val = header_meta.get('electrical_axis_deg') if header_meta.get('electrical_axis_deg') is not None else header_meta.get('saqrs_axis_deg')
+            telemetry_lines.append(f"- Eixo do QRS (SÂQRS / SAQRS): {axis_val}° (Normal: -30° a +90°)")
+        if header_meta.get('sat_axis_deg') is not None:
+            telemetry_lines.append(f"- Eixo da Onda T (SÂT / SAT): {header_meta['sat_axis_deg']}°")
+        if header_meta.get('paper_speed_mms'):
+            telemetry_lines.append(f"- Velocidade do Papel: {header_meta['paper_speed_mms']} mm/s")
+
+        telemetry_str = "\n".join(telemetry_lines) + ("\n" if telemetry_lines else "")
 
         # Montagem do relatório formatado
         report_text = f"""
@@ -132,7 +172,7 @@ Nível de Triagem / Urgência: {urgency_level}
 - Ritmo Cardíaco: {ecg_metrics.get('rhythm_classification', 'N/A') if ecg_metrics else 'N/A'}
 - Intervalo RR Médio: {ecg_metrics.get('rr_interval_mean_ms', 'N/A') if ecg_metrics else 'N/A'} ms
 - Variabilidade da FC (SDNN): {ecg_metrics.get('sdnn_ms', 'N/A') if ecg_metrics else 'N/A'} ms
-{intervals_str}- Morfologia do Segmento ST: {ecg_metrics.get('st_condition', 'N/A') if ecg_metrics else 'N/A'}
+{telemetry_str}- Morfologia do Segmento ST: {ecg_metrics.get('st_condition', 'N/A') if ecg_metrics else 'N/A'}
 - Depressão/Elevação ST (Oldpeak est.): {ecg_metrics.get('estimated_oldpeak', 'N/A') if ecg_metrics else 'N/A'} mV
 
 3. CONDUTA CLÍNICA BASEADA EM UTILIDADE E MAXIMIZAÇÃO DE BENEFÍCIO:
